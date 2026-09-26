@@ -93,7 +93,7 @@ class Peaks:
 
 
 @jax.jit
-def get_fwhms(peaks):
+def _get_fwhms(peaks):
     profile = peaks.profile
     fwhms2 = profile.U_deg2 * jnp.square(peaks.ttheta_deg)
     fwhms2 += profile.V_deg2 * peaks.ttheta_deg
@@ -103,8 +103,34 @@ def get_fwhms(peaks):
     return fwhms
 
 
+def _get_max_size(dx, n_fwhm, fwhms):
+    fwhm = np.max(fwhms)
+    radius = n_fwhm * fwhm
+    size = 2 * radius / dx + 1
+    size_binned = np.exp2(np.ceil(np.log2(size)))
+
+    return int(size_binned)
+
+
+def get_N(peaks, ttheta_deg, n_fwhm):
+    delta = ttheta_deg[1] - ttheta_deg[0]
+    fwhms = _get_fwhms(peaks)
+    N = _get_max_size(delta, n_fwhm, fwhms)
+
+    return N
+
+
+def _get_Ns(model, ttheta_deg, n_fwhm):
+    Ns = tuple(
+        (key, get_N(model[key], ttheta_deg, n_fwhm)) 
+        for key in sorted(model)
+    )
+
+    return Ns
+
+
 @jax.jit
-def get_peak_gauss(center, sigma, area, xx):
+def _get_peak_gauss(center, sigma, area, xx):
     peak = jnp.exp(-0.5 * jnp.square(xx - center) / jnp.square(sigma))
     peak = area * peak / np.sqrt(2. * np.pi) / sigma
 
@@ -112,7 +138,7 @@ def get_peak_gauss(center, sigma, area, xx):
 
 
 @jax.jit
-def get_peak_lorentz(center, gamma, area, xx):
+def _get_peak_lorentz(center, gamma, area, xx):
     peak = gamma / (jnp.square(xx - center) + jnp.square(gamma))
     peak = peak * area / jnp.pi
 
@@ -120,8 +146,8 @@ def get_peak_lorentz(center, gamma, area, xx):
 
 
 @jax.jit(static_argnames="N")
-def get_peaks(peaks, ttheta_deg, N):
-    fwhms = get_fwhms(peaks)
+def _get_peaks(peaks, ttheta_deg, N):
+    fwhms = _get_fwhms(peaks)
     sigmas = fwhms / 2.3548
     gammas = fwhms / 2.
 
@@ -134,8 +160,8 @@ def get_peaks(peaks, ttheta_deg, N):
         idx = jnp.arange(N) + i_lo
 
         ttheta_window = ttheta_deg[idx]
-        gaussian = get_peak_gauss(center, sigma, intensity, ttheta_window)
-        lorentzian = get_peak_lorentz(center, gamma, intensity, ttheta_window)
+        gaussian = _get_peak_gauss(center, sigma, intensity, ttheta_window)
+        lorentzian = _get_peak_lorentz(center, gamma, intensity, ttheta_window)
         peak = peaks.profile.eta * lorentzian + (1 - peaks.profile.eta) * gaussian
 
         out = out.at[idx].add(
@@ -150,27 +176,22 @@ def get_peaks(peaks, ttheta_deg, N):
 
 
 @jax.jit(static_argnames="Ns")
-def get_model(model, ttheta_deg, Ns):
+def _get_model(model, ttheta_deg, Ns):
     fwd = jnp.zeros_like(ttheta_deg)
     for key, N in Ns:
-        fwd += get_peaks(model[key], ttheta_deg, N)
+        fwd += _get_peaks(model[key], ttheta_deg, N)
     return fwd
 
 
-def _get_max_size(dx, n_fwhm, fwhms):
-    fwhm = np.max(fwhms)
-    radius = n_fwhm * fwhm
-    size = 2 * radius / dx + 1
-    size_binned = np.exp2(np.ceil(np.log2(size)))
+###############################################################################
+# Wrappers for n_fwhm
+###############################################################################
 
-    return int(size_binned)
+def get_peaks(peaks, ttheta_deg, *, n_fwhm=4.):
+    Ns = _get_N(peaks, ttheta_deg, n_fwhm)
+    return _get_peaks(peaks, ttheta_deg, N)
 
 
-def _get_Ns(model, xx, n_fwhm):
-    dx = xx[1] - xx[0]
-    Ns = tuple(
-        (key, _get_max_size(dx, n_fwhm, model[key].sigmas)) 
-        for key in sorted(model)
-    )
-
-    return Ns
+def get_model(model, ttheta_deg, *, n_fwhm=4.):
+    Ns = _get_Ns(model, ttheta_deg, n_fwhm)
+    return _get_model(model, ttheta_deg, Ns)
