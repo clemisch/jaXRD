@@ -5,7 +5,12 @@ import equinox as eqx
 
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
+# TODO: move this to io.py
+from pymatgen.analysis.diffraction.xrd import XRDCalculator
+from pymatgen.core import Structure
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 
 @partial(
@@ -14,19 +19,19 @@ from functools import partial
         "a", "b", "c", 
         "alpha", "beta", "gamma", 
     ],
-    meta_fields=["crystal_system", "space_group_symbol", "space_group_number"],
+    meta_fields=["crystal_system", "spg_str", "spg_int"],
 )
 @dataclass(frozen=True)
 class Lattice:
-    crystal_system: str
     a: float
     b: float
     c: float
     alpha: float
     beta: float
     gamma: float
-    space_group_symbol: str
-    space_group_number: int
+    crystal_system: str
+    spg_str: str
+    spg_int: int
 
 
 # @dataclass(frozen=True)
@@ -72,24 +77,82 @@ class Peaks:
     lattice: Lattice | None = None
 
     @classmethod
-    def from_args(cls, ttheta_deg, intensities=None, profile=None, lattice=None):
+    def from_args(cls, ttheta_deg, intensities=None, profile=None, lattice=None, name=None):
         if intensities is None:
             intensities = jnp.ones_like(ttheta_deg)
         if profile is None:
             profile = Profile()
+        if name is None:
+            name = "phase"
 
         assert ttheta_deg.ndim == 1
         assert ttheta_deg.shape == intensities.shape
 
         peaks = cls(
-            name="phase",
-            ttheta_deg=ttheta_deg,
-            intensities=intensities,
+            name=name,
+            ttheta_deg=jnp.array(ttheta_deg),
+            intensities=jnp.array(intensities),
             profile=profile,
             lattice=lattice,
         )
 
         return peaks
+
+
+    @classmethod 
+    def from_cif(cls, cif_path, lambda_A, ttheta_range_deg=None, profile=None, name=None):
+        cif_path = Path(cif_path)
+
+        if ttheta_range_deg is None:
+            ttheta_range_deg = (1e-3, 180. - 1e-3)
+        if profile is None:
+            profile = Profile()
+        if name is None: 
+            name = cif_path.stem
+
+        structure = Structure.from_file(cif_path)
+        analyzer = SpacegroupAnalyzer(structure)
+        calculator = XRDCalculator(wavelength=lambda_A)
+
+        pattern = calculator.get_pattern(
+            structure,
+            two_theta_range=ttheta_range_deg,
+            scaled=True
+        )
+        assert len(pattern.x) > 0
+
+        hkls = []
+        for entries in pattern.hkls:
+            if not entries:
+                hkls.append(None)
+                continue
+            hkls.append(entries[0]["hkl"])
+
+        lattice = Lattice(
+            a=structure.lattice.a,
+            b=structure.lattice.b,
+            c=structure.lattice.c,
+            alpha=structure.lattice.alpha,
+            beta=structure.lattice.beta,
+            gamma=structure.lattice.gamma,
+            crystal_system=analyzer.get_crystal_system(),
+            spg_str=analyzer.get_space_group_symbol(),
+            spg_int=analyzer.get_space_group_number(),
+        )
+
+        peaks = cls(
+            name=name,
+            ttheta_deg=jnp.array(pattern.x),
+            intensities=jnp.array(pattern.y),
+            profile=profile,
+            lattice=lattice,
+        )
+
+        return peaks
+
+
+
+
 
 
 @jax.jit
