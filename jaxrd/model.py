@@ -69,7 +69,7 @@ class Profile:
     meta_fields=["name"],
 )
 @dataclass
-class Peaks:
+class Phase:
     name: str
     ttheta_deg: jax.Array
     intensities: jax.Array
@@ -88,7 +88,7 @@ class Peaks:
         assert ttheta_deg.ndim == 1
         assert ttheta_deg.shape == intensities.shape
 
-        peaks = cls(
+        phase = cls(
             name=name,
             ttheta_deg=jnp.array(ttheta_deg),
             intensities=jnp.array(intensities),
@@ -96,7 +96,7 @@ class Peaks:
             lattice=lattice,
         )
 
-        return peaks
+        return phase
 
 
     @classmethod 
@@ -140,7 +140,7 @@ class Peaks:
             spg_int=analyzer.get_space_group_number(),
         )
 
-        peaks = cls(
+        phase = cls(
             name=name,
             ttheta_deg=jnp.array(pattern.x),
             intensities=jnp.array(pattern.y),
@@ -148,18 +148,50 @@ class Peaks:
             lattice=lattice,
         )
 
-        return peaks
+        return phase
 
 
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=[
+        "phases",
+        "scales",
+    ],
+    meta_fields=["names"],
+)
+@dataclass
+class Histogram:
+    phases: [Phase]
+    scales: jax.Array
+    lambda_A: float
+    names: [str]
 
+    @classmethod
+    def from_phases(cls, phases, lambda_A, scales=None, names=None):
+        if scales is None:
+            scales = jnp.ones(len(phases))
+        if names is None:
+            names = [phase.name for phase in phases]
+
+        assert len(names) == len(phases)
+        assert len(set(names)) == len(names)
+
+        histogram = cls(
+            phases=phases,
+            scales=scales,
+            lambda_A=lambda_A,
+            names=names,
+        )
+
+        return histogram
 
 
 
 @jax.jit
-def _get_fwhms(peaks):
-    profile = peaks.profile
-    fwhms2 = profile.U_deg2 * jnp.square(peaks.ttheta_deg)
-    fwhms2 += profile.V_deg2 * peaks.ttheta_deg
+def _get_fwhms(phase):
+    profile = phase.profile
+    fwhms2 = profile.U_deg2 * jnp.square(phase.ttheta_deg)
+    fwhms2 += profile.V_deg2 * phase.ttheta_deg
     fwhms2 += profile.W_deg2
     fwhms = jnp.sqrt(fwhms2)
 
@@ -175,9 +207,9 @@ def _get_max_size(dx, n_fwhm, fwhms):
     return int(size_binned)
 
 
-def get_N(peaks, ttheta_deg, n_fwhm):
+def _get_N(phase, ttheta_deg, n_fwhm):
     delta = ttheta_deg[1] - ttheta_deg[0]
-    fwhms = _get_fwhms(peaks)
+    fwhms = _get_fwhms(phase)
     N = _get_max_size(delta, n_fwhm, fwhms)
 
     return N
@@ -185,7 +217,7 @@ def get_N(peaks, ttheta_deg, n_fwhm):
 
 def _get_Ns(model, ttheta_deg, n_fwhm):
     Ns = tuple(
-        (key, get_N(model[key], ttheta_deg, n_fwhm)) 
+        (key, _get_N(model[key], ttheta_deg, n_fwhm)) 
         for key in sorted(model)
     )
 
@@ -209,15 +241,15 @@ def _get_peak_lorentz(center, gamma, area, xx):
 
 
 @jax.jit(static_argnames="N")
-def _get_peaks(peaks, ttheta_deg, N):
-    fwhms = _get_fwhms(peaks)
+def _get_phase(phase, ttheta_deg, N):
+    fwhms = _get_fwhms(phase)
     sigmas = fwhms / 2.3548
     gammas = fwhms / 2.
 
     # TODO: potentially many peaks => vmap/scan
     out = jnp.zeros_like(ttheta_deg)
     for center, intensity, sigma, gamma in zip(
-        peaks.ttheta_deg, peaks.intensities, sigmas, gammas
+        phase.ttheta_deg, phase.intensities, sigmas, gammas
     ):
         i_lo = jnp.searchsorted(ttheta_deg, center) - N//2
         idx = jnp.arange(N) + i_lo
@@ -225,7 +257,7 @@ def _get_peaks(peaks, ttheta_deg, N):
         ttheta_window = ttheta_deg[idx]
         gaussian = _get_peak_gauss(center, sigma, intensity, ttheta_window)
         lorentzian = _get_peak_lorentz(center, gamma, intensity, ttheta_window)
-        peak = peaks.profile.eta * lorentzian + (1 - peaks.profile.eta) * gaussian
+        peak = phase.profile.eta * lorentzian + (1 - phase.profile.eta) * gaussian
 
         out = out.at[idx].add(
             peak, 
@@ -239,10 +271,10 @@ def _get_peaks(peaks, ttheta_deg, N):
 
 
 @jax.jit(static_argnames="Ns")
-def _get_model(model, ttheta_deg, Ns):
+def _get_histogram(histogram, ttheta_deg, Ns):
     fwd = jnp.zeros_like(ttheta_deg)
     for key, N in Ns:
-        fwd += _get_peaks(model[key], ttheta_deg, N)
+        fwd += _get_phase(histogram[key], ttheta_deg, N)
     return fwd
 
 
@@ -250,11 +282,11 @@ def _get_model(model, ttheta_deg, Ns):
 # Wrappers for n_fwhm
 ###############################################################################
 
-def get_peaks(peaks, ttheta_deg, *, n_fwhm=4.):
-    Ns = _get_N(peaks, ttheta_deg, n_fwhm)
-    return _get_peaks(peaks, ttheta_deg, N)
+def get_phase(phase, ttheta_deg, *, n_fwhm=4.):
+    N = _get_N(phase, ttheta_deg, n_fwhm)
+    return _get_phase(phase, ttheta_deg, N)
 
 
-def get_model(model, ttheta_deg, *, n_fwhm=4.):
-    Ns = _get_Ns(model, ttheta_deg, n_fwhm)
-    return _get_model(model, ttheta_deg, Ns)
+def get_histogram(histogram, ttheta_deg, *, n_fwhm=4.):
+    Ns = _get_Ns(histogram, ttheta_deg, n_fwhm)
+    return _get_histogram(histogram, ttheta_deg, Ns)
