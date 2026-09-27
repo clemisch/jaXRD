@@ -21,7 +21,7 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
     ],
     meta_fields=["crystal_system", "spg_str", "spg_int"],
 )
-@dataclass(frozen=True)
+@dataclass
 class Lattice:
     a: float
     b: float
@@ -61,8 +61,8 @@ class Profile:
 @partial(
     jax.tree_util.register_dataclass,
     data_fields=[
-        "ttheta_deg", 
         "intensities", 
+        "hkls", 
         "profile",
         "lattice",
     ],
@@ -71,32 +71,10 @@ class Profile:
 @dataclass
 class Phase:
     name: str
-    ttheta_deg: jax.Array
     intensities: jax.Array
+    hkls: jax.Array
     profile: Profile
-    lattice: Lattice | None = None
-
-    @classmethod
-    def from_args(cls, ttheta_deg, intensities=None, profile=None, lattice=None, name=None):
-        if intensities is None:
-            intensities = jnp.ones_like(ttheta_deg)
-        if profile is None:
-            profile = Profile()
-        if name is None:
-            name = "phase"
-
-        assert ttheta_deg.ndim == 1
-        assert ttheta_deg.shape == intensities.shape
-
-        phase = cls(
-            name=name,
-            ttheta_deg=jnp.array(ttheta_deg),
-            intensities=jnp.array(intensities),
-            profile=profile,
-            lattice=lattice,
-        )
-
-        return phase
+    lattice: Lattice
 
 
     @classmethod 
@@ -127,6 +105,7 @@ class Phase:
                 hkls.append(None)
                 continue
             hkls.append(entries[0]["hkl"])
+        hkls = jnp.asarray(hkls, dtype="int32")
 
         lattice = Lattice(
             a=structure.lattice.a,
@@ -142,8 +121,8 @@ class Phase:
 
         phase = cls(
             name=name,
-            ttheta_deg=jnp.array(pattern.x),
             intensities=jnp.array(pattern.y),
+            hkls=hkls,
             profile=profile,
             lattice=lattice,
         )
@@ -156,15 +135,16 @@ class Phase:
     data_fields=[
         "phases",
         "scales",
+        "lambda_A",
     ],
-    meta_fields=["names"],
+    meta_fields=[],
 )
 @dataclass
 class Histogram:
-    phases: [Phase]
-    scales: jax.Array
+    phases: dict[str, Phase]
+    scales: dict[str, float]
     lambda_A: float
-    names: [str]
+
 
     @classmethod
     def from_phases(cls, phases, lambda_A, scales=None, names=None):
@@ -177,10 +157,9 @@ class Histogram:
         assert len(set(names)) == len(names)
 
         histogram = cls(
-            phases=phases,
-            scales=scales,
+            phases=dict(zip(names, phases)),
+            scales=dict(zip(names, scales)),
             lambda_A=lambda_A,
-            names=names,
         )
 
         return histogram
@@ -188,10 +167,11 @@ class Histogram:
 
 
 @jax.jit
-def _get_fwhms(phase):
+def _get_fwhms(phase, lambda_A):
+    centers_deg = _get_centers_deg(phase, lambda_A)
     profile = phase.profile
-    fwhms2 = profile.U_deg2 * jnp.square(phase.ttheta_deg)
-    fwhms2 += profile.V_deg2 * phase.ttheta_deg
+    fwhms2 = profile.U_deg2 * jnp.square(centers_deg)
+    fwhms2 += profile.V_deg2 * centers_deg
     fwhms2 += profile.W_deg2
     fwhms = jnp.sqrt(fwhms2)
 
@@ -207,18 +187,19 @@ def _get_max_size(dx, n_fwhm, fwhms):
     return int(size_binned)
 
 
-def _get_N(phase, ttheta_deg, n_fwhm):
+def _get_N(phase, ttheta_deg, lambda_A, n_fwhm):
     delta = ttheta_deg[1] - ttheta_deg[0]
-    fwhms = _get_fwhms(phase)
+    # TODO: this might become expensive for every LM iterations
+    fwhms = _get_fwhms(phase, lambda_A)
     N = _get_max_size(delta, n_fwhm, fwhms)
 
     return N
 
 
-def _get_Ns(model, ttheta_deg, n_fwhm):
+def _get_Ns(histogram, ttheta_deg, n_fwhm):
     Ns = tuple(
-        (key, _get_N(model[key], ttheta_deg, n_fwhm)) 
-        for key in sorted(model)
+        (key, _get_N(histogram.phases[key], ttheta_deg, histogram.lambda_A, n_fwhm)) 
+        for key in sorted(histogram.phases)
     )
 
     return Ns
@@ -240,16 +221,63 @@ def _get_peak_lorentz(center, gamma, area, xx):
     return peak
 
 
+@jax.jit
+def _get_centers_deg(phase, lambda_A):
+    h = phase.hkls[:, 0]
+    k = phase.hkls[:, 1]    
+    if phase.hkls.shape[1] == 4:
+        l = phase.hkls[:, 3]
+    else:
+        l = phase.hkls[:, 2]
+
+    a = phase.lattice.a
+    b = phase.lattice.b
+    c = phase.lattice.c
+
+    crystal_system = phase.lattice.crystal_system
+    if crystal_system == "cubic":
+        d2_inv = (h * h + k * k + l * l) / (a * a)
+    elif crystal_system == "tetragonal":
+        d2_inv = (h * h + k * k) / (a * a) + (l * l) / (c * c)
+    elif crystal_system == "orthorhombic":
+        d2_inv = (h * h) / (a * a) + (k * k) / (b * b) + (l * l) / (c * c)
+    elif crystal_system in {"hexagonal", "trigonal"}:
+        d2_inv = (4.0 / 3.0) * (h * h + h * k + k * k) / (a * a) + (l * l) / (c * c)
+    elif crystal_system in {"monoclinic", "triclinic"}:
+        alpha = jnp.radians(phase.lattice.alpha)
+        beta = jnp.radians(phase.lattice.beta)
+        gamma = jnp.radians(phase.lattice.gamma)
+
+        metric = jnp.array(
+            a * a, a * b * jnp.cos(gamma), a * c * jnp.cos(beta),
+            a * b * jnp.cos(gamma), b * b, b * c * jnp.cos(alpha),
+            a * c * cos_beta, b * c * jnp.cos(alpha, c * c),
+        ).reshape((3, 3))
+
+        hkls = jnp.stack((h, k, l))  # (3, n_peaks)
+        solved = jnp.linalg.solve(metric, hkls)  # (3, n_peaks)
+        d2_inv = jnp.einsum("ip,ip->p", hkls, solved)  # (n_peaks,)
+
+    d_hkl = 1. / jnp.sqrt(d2_inv)
+    centers_rad = 2. * jnp.arcsin(lambda_A / 2. / d_hkl)
+    centers_deg = jnp.degrees(centers_rad)
+
+    return centers_deg
+
+
+
 @jax.jit(static_argnames="N")
-def _get_phase(phase, ttheta_deg, N):
-    fwhms = _get_fwhms(phase)
+def _get_phase(phase, ttheta_deg, lambda_A, N):
+    fwhms = _get_fwhms(phase, lambda_A)
     sigmas = fwhms / 2.3548
     gammas = fwhms / 2.
+
+    centers_deg = _get_centers_deg(phase, lambda_A)
 
     # TODO: potentially many peaks => vmap/scan
     out = jnp.zeros_like(ttheta_deg)
     for center, intensity, sigma, gamma in zip(
-        phase.ttheta_deg, phase.intensities, sigmas, gammas
+        centers_deg, phase.intensities, sigmas, gammas
     ):
         i_lo = jnp.searchsorted(ttheta_deg, center) - N//2
         idx = jnp.arange(N) + i_lo
@@ -274,7 +302,9 @@ def _get_phase(phase, ttheta_deg, N):
 def _get_histogram(histogram, ttheta_deg, Ns):
     fwd = jnp.zeros_like(ttheta_deg)
     for key, N in Ns:
-        fwd += _get_phase(histogram[key], ttheta_deg, N)
+        fwd += histogram.scales[key] * _get_phase(
+            histogram.phases[key], ttheta_deg, histogram.lambda_A, N
+        )
     return fwd
 
 
@@ -282,9 +312,9 @@ def _get_histogram(histogram, ttheta_deg, Ns):
 # Wrappers for n_fwhm
 ###############################################################################
 
-def get_phase(phase, ttheta_deg, *, n_fwhm=4.):
-    N = _get_N(phase, ttheta_deg, n_fwhm)
-    return _get_phase(phase, ttheta_deg, N)
+def get_phase(phase, ttheta_deg, lambda_A, *, n_fwhm=4.):
+    N = _get_N(phase, ttheta_deg, lambda_A, n_fwhm)
+    return _get_phase(phase, ttheta_deg, lambda_A, N)
 
 
 def get_histogram(histogram, ttheta_deg, *, n_fwhm=4.):

@@ -17,5 +17,16 @@ phase = jaxrd.model.Phase.from_cif(
     profile=jaxrd.model.Profile(W_deg2=2e-2)
 )
 
-ttheta_deg = linspace(ttheta_lo, ttheta_hi, 2000)
-y_calc = jaxrd.model.get_phase(phase, ttheta_deg, n_fwhm=10.)
+phase2 = jaxrd.model.Phase.from_cif(
+    fname, 
+    lambda_A, 
+    (ttheta_lo, ttheta_hi),
+    profile=jaxrd.model.Profile(W_deg2=2e-2),
+    name="bla"
+)
+phase2.lattice.a *= 0.9
+
+
+ttheta_deg = np.linspace(ttheta_lo, ttheta_hi, 2000)
+hist = jaxrd.model.Histogram.from_phases([phase, phase2], lambda_A, scales=[1., 2.])
+y_calc = jaxrd.model.get_histogram(hist, ttheta_deg)
