@@ -34,6 +34,61 @@ class Lattice:
     spg_int: int
 
 
+    @jax.jit
+    def get_center(self, h, k, l, lambda_A):
+        a = self.a
+        b = self.b
+        c = self.c
+
+        if self.crystal_system == "cubic":
+            d2_inv = (h * h + k * k + l * l) / (a * a)
+        elif self.crystal_system == "tetragonal":
+            d2_inv = (h * h + k * k) / (a * a) + (l * l) / (c * c)
+        elif self.crystal_system == "orthorhombic":
+            d2_inv = (h * h) / (a * a) + (k * k) / (b * b) + (l * l) / (c * c)
+        elif self.crystal_system in {"hexagonal", "trigonal"}:
+            d2_inv = (4.0 / 3.0) * (h * h + h * k + k * k) / (a * a) + (l * l) / (c * c)
+        elif self.crystal_system in {"monoclinic", "triclinic"}:
+            alpha = jnp.radians(self.alpha)
+            beta = jnp.radians(self.beta)
+            gamma = jnp.radians(self.gamma)
+
+            metric = jnp.array(
+                a * a, 
+                a * b * jnp.cos(gamma), 
+                a * c * jnp.cos(beta),
+                a * b * jnp.cos(gamma), 
+                b * b, 
+                b * c * jnp.cos(alpha),
+                a * c * jnp.cos(beta), 
+                b * c * jnp.cos(alpha),
+                c * c,
+            ).reshape((3, 3))
+
+            hkl = jnp.stack((h, k, l))
+            d2_inv = hkl @ jnp.linalg.solve(metric, hkl)
+        else:
+            raise ValueError(f"Unknown crystal system: {self.crystal_system!r}")
+
+        d_hkl = 1. / jnp.sqrt(d2_inv)
+        centers_rad = 2. * jnp.arcsin(lambda_A / 2. / d_hkl)
+        centers_deg = jnp.degrees(centers_rad)
+
+        return centers_deg
+
+
+    @jax.jit
+    def get_centers(self, hkls, lambda_A):
+        hs = hkls[:, 0]
+        ks = hkls[:, 1]
+        ls = hkls[:, -1]
+        centers_deg = jax.vmap(self.get_center, (0, 0, 0, None))(hs, ks, ls, lambda_A)
+
+        return centers_deg
+
+
+
+
 # @dataclass(frozen=True)
 # class PhasePeaks:
 #     name: str
@@ -168,11 +223,11 @@ class Histogram:
 
 @jax.jit
 def _get_fwhms(phase, lambda_A):
-    centers_deg = _get_centers_deg(phase, lambda_A)
-    profile = phase.profile
-    fwhms2 = profile.U_deg2 * jnp.square(centers_deg)
-    fwhms2 += profile.V_deg2 * centers_deg
-    fwhms2 += profile.W_deg2
+    centers_deg = phase.lattice.get_centers(phase.hkls, lambda_A)
+
+    fwhms2 = phase.profile.U_deg2 * jnp.square(centers_deg)
+    fwhms2 += phase.profile.V_deg2 * centers_deg
+    fwhms2 += phase.profile.W_deg2
     fwhms = jnp.sqrt(fwhms2)
 
     return fwhms
@@ -221,50 +276,6 @@ def _get_peak_lorentz(center, gamma, area, xx):
     return peak
 
 
-@jax.jit
-def _get_centers_deg(phase, lambda_A):
-    h = phase.hkls[:, 0]
-    k = phase.hkls[:, 1]    
-    if phase.hkls.shape[1] == 4:
-        l = phase.hkls[:, 3]
-    else:
-        l = phase.hkls[:, 2]
-
-    a = phase.lattice.a
-    b = phase.lattice.b
-    c = phase.lattice.c
-
-    crystal_system = phase.lattice.crystal_system
-    if crystal_system == "cubic":
-        d2_inv = (h * h + k * k + l * l) / (a * a)
-    elif crystal_system == "tetragonal":
-        d2_inv = (h * h + k * k) / (a * a) + (l * l) / (c * c)
-    elif crystal_system == "orthorhombic":
-        d2_inv = (h * h) / (a * a) + (k * k) / (b * b) + (l * l) / (c * c)
-    elif crystal_system in {"hexagonal", "trigonal"}:
-        d2_inv = (4.0 / 3.0) * (h * h + h * k + k * k) / (a * a) + (l * l) / (c * c)
-    elif crystal_system in {"monoclinic", "triclinic"}:
-        alpha = jnp.radians(phase.lattice.alpha)
-        beta = jnp.radians(phase.lattice.beta)
-        gamma = jnp.radians(phase.lattice.gamma)
-
-        metric = jnp.array(
-            a * a, a * b * jnp.cos(gamma), a * c * jnp.cos(beta),
-            a * b * jnp.cos(gamma), b * b, b * c * jnp.cos(alpha),
-            a * c * cos_beta, b * c * jnp.cos(alpha, c * c),
-        ).reshape((3, 3))
-
-        hkls = jnp.stack((h, k, l))  # (3, n_peaks)
-        solved = jnp.linalg.solve(metric, hkls)  # (3, n_peaks)
-        d2_inv = jnp.einsum("ip,ip->p", hkls, solved)  # (n_peaks,)
-
-    d_hkl = 1. / jnp.sqrt(d2_inv)
-    centers_rad = 2. * jnp.arcsin(lambda_A / 2. / d_hkl)
-    centers_deg = jnp.degrees(centers_rad)
-
-    return centers_deg
-
-
 
 @jax.jit(static_argnames="N")
 def _get_phase(phase, ttheta_deg, lambda_A, N):
@@ -272,7 +283,7 @@ def _get_phase(phase, ttheta_deg, lambda_A, N):
     sigmas = fwhms / 2.3548
     gammas = fwhms / 2.
 
-    centers_deg = _get_centers_deg(phase, lambda_A)
+    centers_deg = phase.lattice.get_centers(phase.hkls, lambda_A)
 
     # TODO: potentially many peaks => vmap/scan
     out = jnp.zeros_like(ttheta_deg)
