@@ -1,20 +1,21 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
 
 from jax.flatten_util import ravel_pytree
 
+from .model import _get_histogram, _get_Ns
 
 
-@jax.jit(static_argnames=("Ns", "fun_fwd"))
-def get_lm_step(active, passive, ttheta_deg, y_obs, Ns, damping, fun_fwd):
+
+@jax.jit(static_argnames="Ns")
+def get_lm_step(active, passive, ttheta_deg, y_obs, Ns, damping):
     active_flat_init, unravel = ravel_pytree(active)
 
     def get_residuals(active_flat):
-        model = eqx.combine(unravel(active_flat), passive)
-        fwd = fun_fwd(model, xx, Ns)
-        residuals = fwd - yy
+        histogram = eqx.combine(unravel(active_flat), passive)
+        fwd = _get_histogram(histogram, ttheta_deg, Ns)
+        residuals = fwd - y_obs
         return residuals
 
     r = get_residuals(active_flat_init)
@@ -27,41 +28,40 @@ def get_lm_step(active, passive, ttheta_deg, y_obs, Ns, damping, fun_fwd):
     return active_new, jnp.sum(r**2)
 
 
-@jax.jit(static_argnames=("Ns", "fun_fwd"))
-def get_rwp(model, xx, yy, Ns, fun_fwd):
-    fwd = fun_fwd(model, xx, Ns)
-    residual = fwd - yy
+@jax.jit(static_argnames="Ns")
+def get_rwp(histogram, ttheta_deg, y_obs, Ns):
+    fwd = _get_histogram(histogram, ttheta_deg, Ns)
+    residual = fwd - y_obs
     nom = jnp.sum(jnp.square(residual))
-    denom = jnp.sum(jnp.square(yy))
+    denom = jnp.sum(jnp.square(y_obs))
     rwp = 100. * jnp.sqrt(nom / denom)
 
     return rwp
 
 
 def optimize_schedule(
-    model, schedule, 
-    xx, yy, 
-    n_fwhm, fun_fwd, 
-    max_iter, rwp_tol=1e-6,
-    damping=1e-4,
+    histogram, schedule, 
+    ttheta_deg, y_obs, 
+    n_fwhm, max_iter, rwp_tol=1e-6, damping=1e-4,
 ):
-    active_init, passive = eqx.partition(model, schedule)
+    active_init, passive = eqx.partition(histogram, schedule)
 
-    rwp_prev = np.inf
+    rwp_prev = jnp.inf
     active_opt = active_init
-    model_opt = model
+    histogram_opt = histogram
 
     for i_iter in range(max_iter):
-        Ns = get_Ns(model_opt, xx, n_fwhm)
+        Ns = _get_Ns(histogram_opt, ttheta_deg, n_fwhm)
         active_opt, rtot = get_lm_step(
-            active_opt, passive, xx, yy, Ns, damping, fun_fwd
+            active_opt, passive, 
+            ttheta_deg, y_obs, Ns, damping
         )
-        model_opt = eqx.combine(active_opt, passive)
-        rwp_new = get_rwp(model_opt, xx, yy, Ns, fun_fwd)
+        histogram_opt = eqx.combine(active_opt, passive)
+        rwp_new = get_rwp(histogram_opt, ttheta_deg, y_obs, Ns)
         print(rwp_new)
 
         if abs(rwp_new - rwp_prev) < rwp_tol:
             break
         rwp_prev = rwp_new
 
-    return model_opt, i_iter+1, rwp_new
+    return histogram_opt, i_iter+1, rwp_new

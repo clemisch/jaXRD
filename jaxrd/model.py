@@ -87,19 +87,6 @@ class Lattice:
         return centers_deg
 
 
-
-
-# @dataclass(frozen=True)
-# class PhasePeaks:
-#     name: str
-#     ttheta_deg: jax.Array
-#     intensity: jax.Array
-#     hkl: tuple[tuple[int, ...] | None, ...]
-#     d_hkl_angstrom: torch.Tensor
-#     wavelength_angstrom: float | None = None
-#     lattice: Lattice | None = None
-
-
 @partial(
     jax.tree_util.register_dataclass,
     data_fields=["U_deg2", "V_deg2", "W_deg2", "eta"],
@@ -191,6 +178,7 @@ class Phase:
         "phases",
         "scales",
         "lambda_A",
+        "zero_deg",
     ],
     meta_fields=[],
 )
@@ -199,10 +187,16 @@ class Histogram:
     phases: dict[str, Phase]
     scales: dict[str, float]
     lambda_A: float
+    zero_deg: float = 0.0
+
+
+    def __repr__(self):
+        phases = ", ".join(self.phases)
+        return f"Histogram[{phases}]"
 
 
     @classmethod
-    def from_phases(cls, phases, lambda_A, scales=None, names=None):
+    def from_phases(cls, phases, lambda_A, scales=None, names=None, zero_deg=0.0):
         if scales is None:
             scales = jnp.ones(len(phases))
         if names is None:
@@ -215,6 +209,7 @@ class Histogram:
             phases=dict(zip(names, phases)),
             scales=dict(zip(names, scales)),
             lambda_A=lambda_A,
+            zero_deg=zero_deg
         )
 
         return histogram
@@ -314,7 +309,10 @@ def _get_histogram(histogram, ttheta_deg, Ns):
     fwd = jnp.zeros_like(ttheta_deg)
     for key, N in Ns:
         fwd += histogram.scales[key] * _get_phase(
-            histogram.phases[key], ttheta_deg, histogram.lambda_A, N
+            histogram.phases[key], 
+            ttheta_deg + histogram.zero_deg, 
+            histogram.lambda_A, 
+            N,
         )
     return fwd
 
