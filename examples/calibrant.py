@@ -8,6 +8,10 @@ import jaxrd
 
 from jax.flatten_util import ravel_pytree
 
+jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+
 
 lambda_A = 0.9510908133875442
 fname_data = "/scratch/data/calib/calib_al2o3.xye"
@@ -30,16 +34,17 @@ phase = jaxrd.model.Phase.from_cif(
     fname_cif, 
     lambda_A, 
     (ttheta_lo, ttheta_hi),
-    profile=jaxrd.model.Profile(W_deg2=2e-2)
 )
 hist = jaxrd.model.Histogram.from_phases([phase], lambda_A)
+
+
 
 schedule = jax.tree_util.tree_map(lambda _: False, hist)
 schedule.scales["Corundum"] = True
 schedule.zero_deg = True
 
 
-refine_options = dict(n_fwhm=5., max_iter=100, rwp_tol=1e-4, damping=1e-3)
+refine_options = dict(n_fwhm=5., max_iter=10, rwp_tol=1e-4, damping=1e-3)
 
 hist_opt, n_iter, rwp_opt = jaxrd.refine.optimize_schedule(
     hist, schedule, 
@@ -59,9 +64,20 @@ hist_opt2, n_iter, rwp_opt = jaxrd.refine.optimize_schedule(
 y_calc2 = jaxrd.model.get_histogram(hist_opt2, ttheta_deg, n_fwhm=5.)
 
 schedule.phases["Corundum"].intensities = True
+schedule.scales["Corundum"] = False
 hist_opt3, n_iter, rwp_opt = jaxrd.refine.optimize_schedule(
-    hist_opt, schedule, 
+    hist_opt2, schedule, 
     ttheta_deg, y_corr, 
     **refine_options
 )
 y_calc3 = jaxrd.model.get_histogram(hist_opt3, ttheta_deg, n_fwhm=5.)
+
+
+
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(1, 1, layout="tight")
+ax.plot(ttheta_deg, y_corr, "o", mfc="white", mec="black", mew=0.8, ms=5.)
+ax.plot(ttheta_deg, y_calc2, color="C0")
+ax.plot(ttheta_deg, y_calc3, color="C1")
+ax.grid()
