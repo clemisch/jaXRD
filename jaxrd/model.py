@@ -274,17 +274,10 @@ def _get_peak_lorentz(center, gamma, area, xx):
 
 @jax.jit(static_argnames="N")
 def _get_phase(phase, ttheta_deg, lambda_A, N):
-    fwhms = _get_fwhms(phase, lambda_A)
-    sigmas = fwhms / 2.3548
-    gammas = fwhms / 2.
 
-    centers_deg = phase.lattice.get_centers(phase.hkls, lambda_A)
+    def worker(carry, x):
+        center, intensity, sigma, gamma = x
 
-    # TODO: potentially many peaks => vmap/scan
-    out = jnp.zeros_like(ttheta_deg)
-    for center, intensity, sigma, gamma in zip(
-        centers_deg, phase.intensities, sigmas, gammas
-    ):
         i_lo = jnp.searchsorted(ttheta_deg, center) - N//2
         idx = jnp.arange(N) + i_lo
 
@@ -293,13 +286,31 @@ def _get_phase(phase, ttheta_deg, lambda_A, N):
         lorentzian = _get_peak_lorentz(center, gamma, intensity, ttheta_window)
         peak = phase.profile.eta * lorentzian + (1 - phase.profile.eta) * gaussian
 
-        out = out.at[idx].add(
+        carry = carry.at[idx].add(
             peak, 
             mode="drop", 
             wrap_negative_indices=False,
             indices_are_sorted=True,
             unique_indices=True,
         )
+
+        return carry, None
+
+
+    fwhms = _get_fwhms(phase, lambda_A)
+    sigmas = fwhms / 2.3548
+    gammas = fwhms / 2.
+
+    centers_deg = phase.lattice.get_centers(phase.hkls, lambda_A)
+    
+    out = jnp.zeros_like(ttheta_deg)
+    out, _ = jax.lax.scan(
+        worker, 
+        out, 
+        (centers_deg, phase.intensities, sigmas, gammas),
+        unroll=1
+    )
+
 
     return out
 
