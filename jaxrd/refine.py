@@ -39,6 +39,12 @@ def get_rwp(histogram, ttheta_deg, y_obs, Ns):
     return rwp
 
 
+def get_schedule(histogram):
+    schedule = jax.tree_util.tree_map(lambda _: False, histogram)
+
+    return schedule
+
+
 def optimize_schedule(
     histogram, schedule, 
     ttheta_deg, y_obs, 

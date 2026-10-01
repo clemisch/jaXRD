@@ -39,7 +39,7 @@ hist = jaxrd.model.Histogram.from_phases([phase], lambda_A)
 
 
 
-schedule = jax.tree_util.tree_map(lambda _: False, hist)
+schedule = jaxrd.refine.get_schedule(hist)
 schedule.scales["Corundum"] = True
 schedule.zero_deg = True
 
