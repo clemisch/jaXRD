@@ -311,20 +311,22 @@ def _get_phase(phase, ttheta_deg, lambda_A, N):
         unroll=1
     )
 
-
     return out
 
 
 @jax.jit(static_argnames="Ns")
 def _get_histogram(histogram, ttheta_deg, Ns):
+    ttheta_deg = ttheta_deg + histogram.zero_deg
+
     fwd = jnp.zeros_like(ttheta_deg)
     for key, N in Ns:
         fwd += histogram.scales[key] * _get_phase(
             histogram.phases[key], 
-            ttheta_deg + histogram.zero_deg, 
+            ttheta_deg, 
             histogram.lambda_A, 
             N,
         )
+
     return fwd
 
 
