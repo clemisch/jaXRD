@@ -48,7 +48,8 @@ def get_schedule(histogram):
 def optimize_schedule(
     histogram, schedule, 
     ttheta_deg, y_obs, 
-    n_fwhm, max_iter, rwp_tol=1e-6, damping=1e-4,
+    n_fwhm, max_iter, rwp_tol=1e-6, damping=1e-8,
+    silent=False,
 ):
     active_init, passive = eqx.partition(histogram, schedule)
 
@@ -64,7 +65,9 @@ def optimize_schedule(
         )
         histogram_opt = eqx.combine(active_opt, passive)
         rwp_new = get_rwp(histogram_opt, ttheta_deg, y_obs, Ns)
-        print(rwp_new)
+
+        if not silent:
+            print(rwp_new)
 
         if abs(rwp_new - rwp_prev) < rwp_tol:
             break

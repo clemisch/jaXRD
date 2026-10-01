@@ -137,7 +137,7 @@ class Phase:
         pattern = calculator.get_pattern(
             structure,
             two_theta_range=ttheta_range_deg,
-            scaled=True
+            scaled=False
         )
         assert len(pattern.x) > 0
 

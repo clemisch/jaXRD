@@ -46,7 +46,7 @@ schedule.scales["Corundum"] = True
 schedule.zero_deg = True
 
 
-refine_options = dict(n_fwhm=5., max_iter=10, rwp_tol=1e-4, damping=1e-3)
+refine_options = dict(n_fwhm=5., max_iter=100, rwp_tol=1e-4, damping=1e-9)
 
 hist_opt, n_iter, rwp_opt = jaxrd.refine.optimize_schedule(
     hist, schedule, 
