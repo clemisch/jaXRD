@@ -231,8 +231,8 @@ def _get_fwhms(phase, lambda_A):
 def _get_max_size(dx, n_fwhm, fwhms):
     fwhm = np.max(fwhms)
     radius = n_fwhm * fwhm
-    size = 2 * radius / dx + 1
-    size_binned = np.exp2(np.ceil(np.log2(size)))
+    size = 2 * radius / dx 
+    size_binned = np.exp2(np.ceil(np.log2(size)))  # round to next power of 2
 
     return int(size_binned)
 
