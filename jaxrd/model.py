@@ -52,7 +52,7 @@ class Lattice:
             alpha = jnp.radians(self.alpha)
             beta = jnp.radians(self.beta)
             gamma = jnp.radians(self.gamma)
-            metric = jnp.array(
+            metric = jnp.array((
                 a * a, 
                 a * b * jnp.cos(gamma), 
                 a * c * jnp.cos(beta),
@@ -62,7 +62,7 @@ class Lattice:
                 a * c * jnp.cos(beta), 
                 b * c * jnp.cos(alpha),
                 c * c,
-            ).reshape((3, 3))
+            )).reshape((3, 3))
             hkl = jnp.stack((h, k, l))
             d2_inv = hkl @ jnp.linalg.solve(metric, hkl)
         else:
