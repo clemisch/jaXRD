@@ -52,7 +52,6 @@ class Lattice:
             alpha = jnp.radians(self.alpha)
             beta = jnp.radians(self.beta)
             gamma = jnp.radians(self.gamma)
-
             metric = jnp.array(
                 a * a, 
                 a * b * jnp.cos(gamma), 
@@ -64,7 +63,6 @@ class Lattice:
                 b * c * jnp.cos(alpha),
                 c * c,
             ).reshape((3, 3))
-
             hkl = jnp.stack((h, k, l))
             d2_inv = hkl @ jnp.linalg.solve(metric, hkl)
         else:
@@ -334,11 +332,11 @@ def _get_histogram(histogram, ttheta_deg, Ns):
 # Wrappers for n_fwhm
 ###############################################################################
 
-def get_phase(phase, ttheta_deg, lambda_A, *, n_fwhm=4.):
+def get_phase(phase, ttheta_deg, lambda_A, *, n_fwhm=5.):
     N = _get_N(phase, ttheta_deg, lambda_A, n_fwhm)
     return _get_phase(phase, ttheta_deg, lambda_A, N)
 
 
-def get_histogram(histogram, ttheta_deg, *, n_fwhm=4.):
+def get_histogram(histogram, ttheta_deg, *, n_fwhm=5.):
     Ns = _get_Ns(histogram, ttheta_deg, n_fwhm)
     return _get_histogram(histogram, ttheta_deg, Ns)
