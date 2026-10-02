@@ -77,6 +77,8 @@ def optimize_schedule(
             break
         rwp_prev = rwp_new
 
+    histogram_opt = jax.block_until_ready(histogram_opt)
+
     return histogram_opt, i_iter+1, rwp_lst
 
 
