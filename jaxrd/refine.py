@@ -1,3 +1,4 @@
+import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -25,11 +26,11 @@ def get_lm_step(active, passive, ttheta_deg, y_obs, Ns, damping):
     active_flat_new = active_flat_init + jnp.linalg.solve(H, -J.T @ r)
     active_new = unravel(active_flat_new)
 
-    return active_new, jnp.sum(r**2)
+    return active_new
 
 
 @jax.jit(static_argnames="Ns")
-def get_rwp(histogram, ttheta_deg, y_obs, Ns):
+def _get_rwp(histogram, ttheta_deg, y_obs, Ns):
     fwd = _get_histogram(histogram, ttheta_deg, Ns)
     residual = fwd - y_obs
     nom = jnp.sum(jnp.square(residual))
@@ -53,18 +54,21 @@ def optimize_schedule(
 ):
     active_init, passive = eqx.partition(histogram, schedule)
 
-    rwp_prev = jnp.inf
     active_opt = active_init
     histogram_opt = histogram
+    rwp_lst = []
+    rwp_prev = np.inf
 
     for i_iter in range(max_iter):
         Ns = _get_Ns(histogram_opt, ttheta_deg, n_fwhm)
-        active_opt, rtot = get_lm_step(
+        active_opt = get_lm_step(
             active_opt, passive, 
             ttheta_deg, y_obs, Ns, damping
         )
         histogram_opt = eqx.combine(active_opt, passive)
-        rwp_new = get_rwp(histogram_opt, ttheta_deg, y_obs, Ns)
+
+        rwp_new = _get_rwp(histogram_opt, ttheta_deg, y_obs, Ns)
+        rwp_lst.append(rwp_new)
 
         if not silent:
             print(rwp_new)
@@ -73,4 +77,13 @@ def optimize_schedule(
             break
         rwp_prev = rwp_new
 
-    return histogram_opt, i_iter+1, rwp_new
+    return histogram_opt, i_iter+1, rwp_lst
+
+
+###############################################################################
+# Wrappers for n_fwhm
+###############################################################################
+
+def get_rwp(histogram, ttheta_deg, y_obs, *, n_fwhm=5.):
+    Ns = _get_Ns(histogram, ttheta_deg, n_fwhm)
+    return _get_rwp(histogram, ttheta_deg, y_obs, Ns)
