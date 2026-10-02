@@ -84,6 +84,7 @@ def get_limits(histogram, apply_default=True):
     return limits
 
 
+@jax.jit
 def clip_parameters(parameters, limits):
     clipped = jax.tree_util.tree_map(
         lambda x, bound: None if x is None else jnp.clip(x, bound[0], bound[1]),
@@ -92,7 +93,6 @@ def clip_parameters(parameters, limits):
     )
 
     return clipped
-
 
 
 def optimize_schedule(
@@ -131,6 +131,10 @@ def optimize_schedule(
 
         if abs(rwp_new - rwp_prev) < rwp_tol:
             break
+
+        if rwp_new > rwp_prev:
+            break
+
         rwp_prev = rwp_new
 
     histogram_opt = jax.block_until_ready(histogram_opt)
