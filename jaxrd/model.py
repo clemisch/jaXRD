@@ -2,6 +2,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
+import warnings
 
 from dataclasses import dataclass
 from functools import partial
@@ -128,7 +129,10 @@ class Phase:
         if name is None: 
             name = cif_path.stem
 
-        structure = Structure.from_file(cif_path)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*fractional coordinates rounded to ideal values.*")
+            structure = Structure.from_file(cif_path)
+
         analyzer = SpacegroupAnalyzer(structure)
         calculator = XRDCalculator(wavelength=lambda_A)
 
