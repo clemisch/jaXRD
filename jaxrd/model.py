@@ -286,7 +286,7 @@ def _get_phase(phase, ttheta_deg, lambda_A, N):
         ttheta_window = ttheta_deg[idx]
         gaussian = _get_peak_gauss(center, sigma, intensity, ttheta_window)
         lorentzian = _get_peak_lorentz(center, gamma, intensity, ttheta_window)
-        peak = phase.profile.eta * lorentzian + (1 - phase.profile.eta) * gaussian
+        peak = phase.profile.eta * lorentzian + (1. - phase.profile.eta) * gaussian
 
         carry = carry.at[idx].add(
             peak, 
